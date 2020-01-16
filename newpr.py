@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-from base64 import standard_b64encode
 import json
-from urllib.error import HTTPError
 import zlib
+from base64 import standard_b64encode
 
 import requests
+from requests.exceptions import HTTPError
 
 import eventhandler
 from helpers import is_addition, normalize_file_path
@@ -12,87 +12,32 @@ from helpers import is_addition, normalize_file_path
 DIFF_HEADER_PREFIX = 'diff --git '
 
 
-class APIProvider(object):
-    def __init__(self, payload, user):
-        (owner, repo, issue) = extract_globals_from_payload(payload)
+class GithubAPIProvider:
+    BASE_URL = "https://api.github.com/"
+    contributors_url = BASE_URL + "repos/%s/%s/contributors?per_page=400"
+    post_comment_url = BASE_URL + "repos/%s/%s/issues/%s/comments"
+    collaborators_url = BASE_URL + "repos/%s/%s/collaborators"
+    issue_url = BASE_URL + "repos/%s/%s/issues/%s"
+    get_label_url = BASE_URL + "repos/%s/%s/issues/%s/labels"
+    add_label_url = BASE_URL + "repos/%s/%s/issues/%s/labels"
+    remove_label_url = BASE_URL + "%repos/s/%s/issues/%s/labels/%s"
+    check_membership_url = BASE_URL + 'orgs/%s/members/%s'
+
+    def __init__(self, payload, user, token, owner=None, repo=None, issue=None):
         self.owner = owner
         self.repo = repo
         self.issue = issue
         self.user = user
         self.changed_files = None
-
-    def is_new_contributor(self, username):
-        raise NotImplementedError
-
-    def post_comment(self, body):
-        raise NotImplementedError
-
-    def add_label(self, label):
-        raise NotImplementedError
-
-    def remove_label(self, label):
-        raise NotImplementedError
-
-    def get_labels(self):
-        raise NotImplementedError
-
-    def get_diff(self):
-        return NotImplementedError
-
-    def set_assignee(self, assignee):
-        raise NotImplementedError
-
-    def get_pull(self):
-        raise NotImplementedError
-
-    def get_page_content(self, url):
-        raise NotImplementedError
-
-    def get_diff_headers(self):
-        diff = self.get_diff()
-        for line in diff.splitlines():
-            if line.startswith(DIFF_HEADER_PREFIX):
-                yield line
-
-    def get_changed_files(self):
-        if self.changed_files is None:
-            changed_files = []
-            for line in self.get_diff_headers():
-                files = line.split(DIFF_HEADER_PREFIX)[-1].split(' ')
-                changed_files.extend(files)
-
-            # And get unique values using `set()`
-            normalized = map(normalize_file_path, changed_files)
-            self.changed_files = set(f for f in normalized if f is not None)
-        return self.changed_files
-
-    def get_added_lines(self):
-        diff = self.get_diff()
-        for line in diff.splitlines():
-            if is_addition(line):
-                # prefix of one or two pluses (+)
-                yield line
-
-
-class GithubAPIProvider(APIProvider):
-    BASE_URL = "https://api.github.com/repos/"
-    contributors_url = BASE_URL + "%s/%s/contributors?per_page=400"
-    post_comment_url = BASE_URL + "%s/%s/issues/%s/comments"
-    collaborators_url = BASE_URL + "%s/%s/collaborators"
-    issue_url = BASE_URL + "%s/%s/issues/%s"
-    get_label_url = BASE_URL + "%s/%s/issues/%s/labels"
-    add_label_url = BASE_URL + "%s/%s/issues/%s/labels"
-    remove_label_url = BASE_URL + "%s/%s/issues/%s/labels/%s"
-    check_membership_url = 'https://api.github.com/orgs/%s/members/%s'
-
-    def __init__(self, payload, user, token):
-        APIProvider.__init__(self, payload, user)
         self.token = token
         self._labels = None
         self._diff = None
         if "pull_request" in payload:
             self.diff_url = payload["pull_request"]["diff_url"]
             self.pull_url = payload["pull_request"]["url"]
+
+    def extract_globals(self, payload):
+        self.owner, self.repo, self.issue = extract_globals_from_payload(payload)
 
     def api_req(self, method, url, data=None, media_type=None):
         data = None if not data else json.dumps(data)
@@ -158,7 +103,7 @@ information about the problem.
 
         return links
 
-    def is_new_contributor(self, username):
+    def is_in_the_organization(self, username):
         url = self.check_membership_url % (self.owner, username)
         res = self.api_req("GET", url)
         return res['header']['Status'] == '404 Not Found'
@@ -168,7 +113,7 @@ information about the problem.
         try:
             self.api_req("POST", url, {"body": body})
         except HTTPError as e:
-            if e.code == 201:
+            if hasattr(e.response, 'status_code') and e.response.status_code == 201:
                 pass
             else:
                 raise e
@@ -180,7 +125,7 @@ information about the problem.
         try:
             self.api_req("POST", url, [label])
         except HTTPError as e:
-            if e.code == 201:
+            if hasattr(e.response, 'status_code') and e.response.status_code == 201:
                 pass
             else:
                 raise e
@@ -202,7 +147,7 @@ information about the problem.
         try:
             result = self.api_req("GET", url)
         except HTTPError as e:
-            if e.code == 201:
+            if hasattr(e.response, 'status_code') and e.response.status_code == 201:
                 pass
             else:
                 raise e
@@ -220,7 +165,7 @@ information about the problem.
         try:
             self.api_req("PATCH", url, {"assignee": assignee})['body']
         except HTTPError as e:
-            if e.code == 201:
+            if hasattr(e.response, 'status_code') and e.response.status_code == 201:
                 pass
             else:
                 raise e
@@ -228,11 +173,30 @@ information about the problem.
     def get_pull(self):
         return self.api_req("GET", self.pull_url)["body"]
 
+    def get_diff_headers(self):
+        diff = self.get_diff()
+        for line in diff.splitlines():
+            if line.startswith(DIFF_HEADER_PREFIX):
+                yield line
 
-img = ('<img src="http://www.joshmatthews.net/warning.svg" '
-       'alt="warning" height=20>')
-warning_header = '{} **Warning** {}'.format(img, img)
-warning_summary = warning_header + '\n\n%s'
+    def get_changed_files(self):
+        if self.changed_files is None:
+            changed_files = []
+            for line in self.get_diff_headers():
+                files = line.split(DIFF_HEADER_PREFIX)[-1].split(' ')
+                changed_files.extend(files)
+
+            # And get unique values using `set()`
+            normalized = map(normalize_file_path, changed_files)
+            self.changed_files = set(f for f in normalized if f is not None)
+        return self.changed_files
+
+    def get_added_lines(self):
+        diff = self.get_diff()
+        for line in diff.splitlines():
+            if is_addition(line):
+                # prefix of one or two pluses (+)
+                yield line
 
 
 def extract_globals_from_payload(payload):
@@ -244,7 +208,13 @@ def extract_globals_from_payload(payload):
         owner = payload['pull_request']['base']['repo']['owner']['login']
         repo = payload['pull_request']['base']['repo']['name']
         issue = str(payload["number"])
-    return (owner, repo, issue)
+    return owner, repo, issue
+
+
+img = ('<img src="http://www.joshmatthews.net/warning.svg" '
+       'alt="warning" height=20>')
+warning_header = '{} **Warning** {}'.format(img, img)
+warning_summary = warning_header + '\n\n%s'
 
 
 def handle_payload(api, payload, handlers=None):
