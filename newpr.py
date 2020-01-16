@@ -1,19 +1,10 @@
-#!/usr/bin/env python2
-
-from __future__ import absolute_import, print_function
-
+#!/usr/bin/env python3
 from base64 import standard_b64encode
-import cgi
-import cgitb
-import ConfigParser
-import contextlib
-import gzip
-try:
-    import simplejson as json
-except:
-    import json
-from StringIO import StringIO
-import urllib2
+import json
+from urllib.error import HTTPError
+import zlib
+
+import requests
 
 import eventhandler
 from helpers import is_addition, normalize_file_path
@@ -92,6 +83,7 @@ class GithubAPIProvider(APIProvider):
     get_label_url = BASE_URL + "%s/%s/issues/%s/labels"
     add_label_url = BASE_URL + "%s/%s/issues/%s/labels"
     remove_label_url = BASE_URL + "%s/%s/issues/%s/labels/%s"
+    check_membership_url = 'https://api.github.com/orgs/%s/members/%s'
 
     def __init__(self, payload, user, token):
         APIProvider.__init__(self, payload, user)
@@ -105,21 +97,39 @@ class GithubAPIProvider(APIProvider):
     def api_req(self, method, url, data=None, media_type=None):
         data = None if not data else json.dumps(data)
         headers = {} if not data else {'Content-Type': 'application/json'}
-        req = urllib2.Request(url, data, headers)
-        req.get_method = lambda: method
+
         if self.token:
             authorization = '%s:%s' % (self.user, self.token)
-            base64string = standard_b64encode(authorization).replace('\n', '')
-            req.add_header("Authorization", "Basic %s" % base64string)
+            base64string = standard_b64encode(bytes(authorization.replace('\n', ''), encoding='utf8'))
+            headers["Authorization"] = "Basic %s" % base64string.decode('utf8')
 
         if media_type:
-            req.add_header("Accept", media_type)
-        f = urllib2.urlopen(req)
-        header = f.info()
-        if header.get('Content-Encoding') == 'gzip':
-            buf = StringIO(f.read())
-            f = gzip.GzipFile(fileobj=buf)
-        return {"header": header, "body": f.read()}
+            headers["Accept"] = media_type
+
+        res = getattr(requests, method.lower())(url, data=data, headers=headers)
+
+        if res.headers.get('Content-Encoding'.lower()) == 'gzip':
+            try:
+                body = zlib.decompress(res.content, 16 + zlib.MAX_WBITS)
+            except:
+                body = res.text
+        else:
+            body = res.text
+
+        return {"header": res.headers, "body": body}
+
+    def post_failure_comment(self, build_log_url, artifacts_url,  details):
+        msg = """The job `hazelcast-pr-builder` of your PR failed ([log]({0}), [artifacts]({1})). 
+Through arcane magic we have determined that the following fragments from the build log may contain 
+information about the problem.
+<details>
+<summary>Click to expand the log file</summary>
+<pre>
+{2}
+</details>
+</pre>""".format(build_log_url, artifacts_url, details)
+
+        self.post_comment(msg)
 
     # This function is adapted from https://github.com/kennethreitz/requests/blob/209a871b638f85e2c61966f82e547377ed4260d9/requests/utils.py#L562  # noqa
     # Licensed under Apache 2.0: http://www.apache.org/licenses/LICENSE-2.0
@@ -149,26 +159,15 @@ class GithubAPIProvider(APIProvider):
         return links
 
     def is_new_contributor(self, username):
-        url = self.contributors_url % (self.owner, self.repo)
-        # iterate through the pages to try and find the contributor
-        while True:
-            stats_raw = self.api_req("GET", url)
-            stats = json.loads(stats_raw['body'])
-            links = self.parse_header_links(stats_raw['header'].get('Link'))
-
-            for contributor in stats:
-                if contributor['login'] == username:
-                    return False
-
-            if not links or 'next' not in links:
-                return True
-            url = links['next']
+        url = self.check_membership_url % (self.owner, username)
+        res = self.api_req("GET", url)
+        return res['header']['Status'] == '404 Not Found'
 
     def post_comment(self, body):
         url = self.post_comment_url % (self.owner, self.repo, self.issue)
         try:
             self.api_req("POST", url, {"body": body})
-        except urllib2.HTTPError as e:
+        except HTTPError as e:
             if e.code == 201:
                 pass
             else:
@@ -180,7 +179,7 @@ class GithubAPIProvider(APIProvider):
             self._labels += [label]
         try:
             self.api_req("POST", url, [label])
-        except urllib2.HTTPError as e:
+        except HTTPError as e:
             if e.code == 201:
                 pass
             else:
@@ -193,7 +192,7 @@ class GithubAPIProvider(APIProvider):
             self._labels.remove(label)
         try:
             self.api_req("DELETE", url, {})
-        except urllib2.HTTPError:
+        except HTTPError:
             pass
 
     def get_labels(self):
@@ -202,7 +201,7 @@ class GithubAPIProvider(APIProvider):
             return self._labels
         try:
             result = self.api_req("GET", url)
-        except urllib2.HTTPError as e:
+        except HTTPError as e:
             if e.code == 201:
                 pass
             else:
@@ -220,7 +219,7 @@ class GithubAPIProvider(APIProvider):
         url = self.issue_url % (self.owner, self.repo, self.issue)
         try:
             self.api_req("PATCH", url, {"assignee": assignee})['body']
-        except urllib2.HTTPError as e:
+        except HTTPError as e:
             if e.code == 201:
                 pass
             else:
@@ -228,13 +227,6 @@ class GithubAPIProvider(APIProvider):
 
     def get_pull(self):
         return self.api_req("GET", self.pull_url)["body"]
-
-    def get_page_content(self, url):
-        try:
-            with contextlib.closing(urllib2.urlopen(url)) as fd:
-                return fd.read()
-        except urllib2.URLError:
-            return None
 
 
 img = ('<img src="http://www.joshmatthews.net/warning.svg" '
@@ -264,21 +256,3 @@ def handle_payload(api, payload, handlers=None):
     if warnings:
         formatted_warnings = '\n'.join(map(lambda x: '* ' + x, warnings))
         api.post_comment(warning_summary % formatted_warnings)
-
-
-if __name__ == "__main__":
-    print("Content-Type: text/html;charset=utf-8")
-    print()
-
-    cgitb.enable()
-
-    config = ConfigParser.RawConfigParser()
-    config.read('./config')
-    user = config.get('github', 'user')
-    token = config.get('github', 'token')
-
-    post = cgi.FieldStorage()
-    payload_raw = post.getfirst("payload", '')
-    payload = json.loads(payload_raw)
-
-    handle_payload(GithubAPIProvider(payload, user, token), payload)

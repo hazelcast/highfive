@@ -1,8 +1,0 @@
-{
-    "steps": [{
-        "logs": [
-            ["stdio", "handlers/homu_status/tests/json/builders/test_stdio"]
-        ],
-        "text": ["test", "failed"]
-    }]
-}

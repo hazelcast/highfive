@@ -3,11 +3,12 @@ from __future__ import absolute_import
 import re
 
 from eventhandler import EventHandler
-from helpers import get_collaborators
 
 WELCOME_MSG = ("Thanks for the pull request, and welcome! "
-               "The Servo team is excited to review your changes, "
-               "and you should hear from @%s (or someone else) soon.")
+               "The Hazelcast team is excited to review your changes, "
+               "and you should hear from @%s or @%s (or someone else) soon."
+               "In the meantime, make sure that you signed the CLA"
+               "as described [here](https://hazelcast.atlassian.net/wiki/spaces/COM/pages/6357071/Hazelcast+Contributor+Agreement)")
 
 
 def find_reviewer(comment):
@@ -62,21 +63,22 @@ class AssignReviewerHandler(EventHandler):
 
         # Find a reviewer from PR comment (like "r? username"),
         # or assign one ourselves.
-        if not reviewer:
-            collaborators = get_collaborators(api)
-            if not collaborators:
-                return
-            reviewer = choose_reviewer(pr, collaborators)
+        #if not reviewer:
+        #    collaborators = get_collaborators(api)
+        #    if not collaborators:
+        #        return
+        #    reviewer = choose_reviewer(pr, collaborators)
 
-        if not reviewer:
-            return
+        #if not reviewer:
+        #    return
 
-        api.set_assignee(reviewer)
+        #api.set_assignee(reviewer)
 
         # Add welcome message for new contributors.
         author = pr['user']['login']
         if api.is_new_contributor(author):
-            api.post_comment(WELCOME_MSG % reviewer)
+            api.post_comment(WELCOME_MSG % ('Holmistr', 'mmedenjak'))
+            api.add_label('Source: Community')
 
     def on_new_comment(self, api, payload):
         if not self.is_open_pr(payload):
