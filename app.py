@@ -3,18 +3,17 @@ import datetime
 import hashlib
 import hmac
 import json
+import traceback
 
 import flask
 from waitress import serve
 
-from handlers.assign_reviewer import AssignReviewerHandler
-from newpr import GithubAPIProvider
+from handlers.welcome_user import WelcomeUserHandler
+from newpr import GithubAPIProvider, handle_payload
 
 
 def create_app():
     app = flask.Flask(__name__)
-
-    handler = AssignReviewerHandler()
 
     config = configparser.RawConfigParser()
     config.read('./config')
@@ -48,7 +47,7 @@ def create_app():
         try:
             api_provider = GithubAPIProvider(payload, user, token)
             api_provider.extract_globals(payload)
-            handler.handle_payload(api_provider, payload)
+            handle_payload(api_provider, payload, [WelcomeUserHandler()])
             return 'OK\n', 200
         except Exception as e:
             print()
@@ -57,6 +56,7 @@ def create_app():
             print('Delivery ID:', delivery)
             print('Event name:', event)
             print(e)
+            traceback.print_exc()
             return 'Internal server error\n', 500
 
     @app.route('/build', methods=['POST'])
@@ -68,6 +68,7 @@ def create_app():
             return 'OK\n', 200
         except Exception as e:
             print(e)
+            traceback.print_exc()
             return 'Internal server error\n', 400
 
     @app.route('/')

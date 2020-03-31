@@ -106,7 +106,7 @@ information about the problem.
     def is_in_the_organization(self, username):
         url = self.check_membership_url % (self.owner, username)
         res = self.api_req("GET", url)
-        return res['header']['Status'] == '404 Not Found'
+        return res['header']['Status'] != '404 Not Found'
 
     def post_comment(self, body):
         url = self.post_comment_url % (self.owner, self.repo, self.issue)
@@ -203,7 +203,10 @@ def extract_globals_from_payload(payload):
     if payload["action"] == "created" or payload["action"] == "labeled":
         owner = payload['repository']['owner']['login']
         repo = payload['repository']['name']
-        issue = str(payload['issue']['number'])
+        try:
+            issue = str(payload['issue']['number'])
+        except KeyError:
+            issue = str(payload['number'])
     else:
         owner = payload['pull_request']['base']['repo']['owner']['login']
         repo = payload['pull_request']['base']['repo']['name']
