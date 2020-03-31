@@ -1,9 +1,8 @@
 import configparser
-import datetime
 import hashlib
 import hmac
 import json
-import traceback
+from logging.config import dictConfig
 
 import flask
 from waitress import serve
@@ -13,6 +12,24 @@ from newpr import GithubAPIProvider, handle_payload
 
 
 def create_app():
+    dictConfig({
+        'version': 1,
+        'formatters': {'default': {
+            'format': '[%(asctime)s] %(levelname)s in %(module)s: %(message)s',
+        }},
+        'handlers': {'file.handler': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'formatter': 'default',
+            'filename': 'server.log',
+            'maxBytes': 50 * 1024 * 1024,  # 50MB
+
+        }},
+        'root': {
+            'level': 'INFO',
+            'handlers': ['file.handler']
+        }
+    })
+
     app = flask.Flask(__name__)
 
     config = configparser.RawConfigParser()
@@ -37,7 +54,7 @@ def create_app():
             expected = hmac.new(webhook_secret.encode('utf8'), digestmod=hashlib.sha1)
             expected.update(raw_data)
             expected = expected.hexdigest()
-            if not hmac.compare_digest('sha1='+expected, signature):
+            if not hmac.compare_digest('sha1=' + expected, signature):
                 return 'Error: invalid signature\n', 403
 
         try:
@@ -50,13 +67,9 @@ def create_app():
             handle_payload(api_provider, payload, [WelcomeUserHandler()])
             return 'OK\n', 200
         except Exception as e:
-            print()
-            print('An exception occurred while processing a webhook!')
-            print('Time:', datetime.datetime.now())
-            print('Delivery ID:', delivery)
-            print('Event name:', event)
-            print(e)
-            traceback.print_exc()
+            app.logger.error('An exception occurred while processing a web hook. Delivery id: {}, event name: {}'
+                             .format(delivery, event))
+            app.log_exception(e)
             return 'Internal server error\n', 500
 
     @app.route('/build', methods=['POST'])
@@ -67,9 +80,8 @@ def create_app():
             provider.post_failure_comment(payload['build-log-url'], payload['artifacts-url'], payload['details'])
             return 'OK\n', 200
         except Exception as e:
-            print(e)
-            traceback.print_exc()
-            return 'Internal server error\n', 400
+            app.log_exception(e)
+            return 'Something went wrong\n', 400
 
     @app.route('/')
     def root():
