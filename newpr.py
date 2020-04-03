@@ -63,16 +63,15 @@ class GithubAPIProvider:
 
         return {"header": res.headers, "body": body}
 
-    def post_failure_comment(self, build_log_url, artifacts_url,  details):
-        msg = """The job `hazelcast-pr-builder` of your PR failed ([log]({0}), [artifacts]({1})). 
-Through arcane magic we have determined that the following fragments from the build log may contain 
-information about the problem.
+    def post_failure_comment(self, job_name, build_log_url, artifacts_url,  details):
+        msg = """The job `{0}` of your PR failed ([log]({1}), [artifacts]({2})). 
+Through arcane magic we have determined that the following fragments from the build log may contain information about the problem.
 <details>
 <summary>Click to expand the log file</summary>
 <pre>
-{2}
+{3}
 </details>
-</pre>""".format(build_log_url, artifacts_url, details)
+</pre>""".format(job_name, build_log_url, artifacts_url, details)
 
         self.post_comment(msg)
 

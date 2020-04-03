@@ -76,8 +76,9 @@ def create_app():
     def build_result():
         try:
             payload = json.loads(flask.request.get_data(), strict=False)
-            provider = GithubAPIProvider(payload, user, token, 'hazelcast', 'hazelcast', payload['id'])
-            provider.post_failure_comment(payload['build-log-url'], payload['artifacts-url'], payload['details'])
+            provider = GithubAPIProvider(payload, user, token, 'hazelcast', payload['repo'], payload['id'])
+            provider.post_failure_comment(payload['job-name'], payload['build-log-url'], payload['artifacts-url'],
+                                          payload['details'])
             return 'OK\n', 200
         except Exception as e:
             app.log_exception(e)
