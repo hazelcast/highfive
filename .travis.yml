@@ -1,6 +1,0 @@
-language: python
-python:
-  - "2.7"
-script:
-  - flake8 .
-  - python test.py

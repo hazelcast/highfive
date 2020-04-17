@@ -1,19 +1,10 @@
-#!/usr/bin/env python2
-
-from __future__ import absolute_import, print_function
-
+#!/usr/bin/env python3
+import json
+import zlib
 from base64 import standard_b64encode
-import cgi
-import cgitb
-import ConfigParser
-import contextlib
-import gzip
-try:
-    import simplejson as json
-except:
-    import json
-from StringIO import StringIO
-import urllib2
+
+import requests
+from requests.exceptions import HTTPError
 
 import eventhandler
 from helpers import is_addition, normalize_file_path
@@ -21,80 +12,23 @@ from helpers import is_addition, normalize_file_path
 DIFF_HEADER_PREFIX = 'diff --git '
 
 
-class APIProvider(object):
-    def __init__(self, payload, user):
-        (owner, repo, issue) = extract_globals_from_payload(payload)
+class GithubAPIProvider:
+    BASE_URL = "https://api.github.com/"
+    contributors_url = BASE_URL + "repos/%s/%s/contributors?per_page=400"
+    post_comment_url = BASE_URL + "repos/%s/%s/issues/%s/comments"
+    collaborators_url = BASE_URL + "repos/%s/%s/collaborators"
+    issue_url = BASE_URL + "repos/%s/%s/issues/%s"
+    get_label_url = BASE_URL + "repos/%s/%s/issues/%s/labels"
+    add_label_url = BASE_URL + "repos/%s/%s/issues/%s/labels"
+    remove_label_url = BASE_URL + "%repos/s/%s/issues/%s/labels/%s"
+    check_membership_url = BASE_URL + 'orgs/%s/members/%s'
+
+    def __init__(self, payload, user, token, owner=None, repo=None, issue=None):
         self.owner = owner
         self.repo = repo
         self.issue = issue
         self.user = user
         self.changed_files = None
-
-    def is_new_contributor(self, username):
-        raise NotImplementedError
-
-    def post_comment(self, body):
-        raise NotImplementedError
-
-    def add_label(self, label):
-        raise NotImplementedError
-
-    def remove_label(self, label):
-        raise NotImplementedError
-
-    def get_labels(self):
-        raise NotImplementedError
-
-    def get_diff(self):
-        return NotImplementedError
-
-    def set_assignee(self, assignee):
-        raise NotImplementedError
-
-    def get_pull(self):
-        raise NotImplementedError
-
-    def get_page_content(self, url):
-        raise NotImplementedError
-
-    def get_diff_headers(self):
-        diff = self.get_diff()
-        for line in diff.splitlines():
-            if line.startswith(DIFF_HEADER_PREFIX):
-                yield line
-
-    def get_changed_files(self):
-        if self.changed_files is None:
-            changed_files = []
-            for line in self.get_diff_headers():
-                files = line.split(DIFF_HEADER_PREFIX)[-1].split(' ')
-                changed_files.extend(files)
-
-            # And get unique values using `set()`
-            normalized = map(normalize_file_path, changed_files)
-            self.changed_files = set(f for f in normalized if f is not None)
-        return self.changed_files
-
-    def get_added_lines(self):
-        diff = self.get_diff()
-        for line in diff.splitlines():
-            if is_addition(line):
-                # prefix of one or two pluses (+)
-                yield line
-
-
-class GithubAPIProvider(APIProvider):
-    BASE_URL = "https://api.github.com/repos/"
-    contributors_url = BASE_URL + "%s/%s/contributors?per_page=400"
-    post_comment_url = BASE_URL + "%s/%s/issues/%s/comments"
-    collaborators_url = BASE_URL + "%s/%s/collaborators"
-    issue_url = BASE_URL + "%s/%s/issues/%s"
-    get_label_url = BASE_URL + "%s/%s/issues/%s/labels"
-    add_label_url = BASE_URL + "%s/%s/issues/%s/labels"
-    remove_label_url = BASE_URL + "%s/%s/issues/%s/labels/%s"
-
-    def __init__(self, payload, user, token):
-        APIProvider.__init__(self, payload, user)
         self.token = token
         self._labels = None
         self._diff = None
@@ -102,24 +36,44 @@ class GithubAPIProvider(APIProvider):
             self.diff_url = payload["pull_request"]["diff_url"]
             self.pull_url = payload["pull_request"]["url"]
 
+    def extract_globals(self, payload):
+        self.owner, self.repo, self.issue = extract_globals_from_payload(payload)
+
     def api_req(self, method, url, data=None, media_type=None):
         data = None if not data else json.dumps(data)
         headers = {} if not data else {'Content-Type': 'application/json'}
-        req = urllib2.Request(url, data, headers)
-        req.get_method = lambda: method
+
         if self.token:
             authorization = '%s:%s' % (self.user, self.token)
-            base64string = standard_b64encode(authorization).replace('\n', '')
-            req.add_header("Authorization", "Basic %s" % base64string)
+            base64string = standard_b64encode(bytes(authorization.replace('\n', ''), encoding='utf8'))
+            headers["Authorization"] = "Basic %s" % base64string.decode('utf8')
 
         if media_type:
-            req.add_header("Accept", media_type)
-        f = urllib2.urlopen(req)
-        header = f.info()
-        if header.get('Content-Encoding') == 'gzip':
-            buf = StringIO(f.read())
-            f = gzip.GzipFile(fileobj=buf)
-        return {"header": header, "body": f.read()}
+            headers["Accept"] = media_type
+
+        res = getattr(requests, method.lower())(url, data=data, headers=headers)
+
+        if res.headers.get('Content-Encoding'.lower()) == 'gzip':
+            try:
+                body = zlib.decompress(res.content, 16 + zlib.MAX_WBITS)
+            except:
+                body = res.text
+        else:
+            body = res.text
+
+        return {"header": res.headers, "body": body}
+
+    def post_failure_comment(self, job_name, build_log_url, artifacts_url,  details):
+        msg = """The job `{0}` of your PR failed ([log]({1}), [artifacts]({2})). 
+Through arcane magic we have determined that the following fragments from the build log may contain information about the problem.
+<details>
+<summary>Click to expand the log file</summary>
+<pre>
+{3}
+</details>
+</pre>""".format(job_name, build_log_url, artifacts_url, details)
+
+        self.post_comment(msg)
 
     # This function is adapted from https://github.com/kennethreitz/requests/blob/209a871b638f85e2c61966f82e547377ed4260d9/requests/utils.py#L562  # noqa
     # Licensed under Apache 2.0: http://www.apache.org/licenses/LICENSE-2.0
@@ -148,28 +102,17 @@ class GithubAPIProvider(APIProvider):
 
         return links
 
-    def is_new_contributor(self, username):
-        url = self.contributors_url % (self.owner, self.repo)
-        # iterate through the pages to try and find the contributor
-        while True:
-            stats_raw = self.api_req("GET", url)
-            stats = json.loads(stats_raw['body'])
-            links = self.parse_header_links(stats_raw['header'].get('Link'))
-
-            for contributor in stats:
-                if contributor['login'] == username:
-                    return False
-
-            if not links or 'next' not in links:
-                return True
-            url = links['next']
+    def is_in_the_organization(self, username):
+        url = self.check_membership_url % (self.owner, username)
+        res = self.api_req("GET", url)
+        return res['header']['Status'] != '404 Not Found'
 
     def post_comment(self, body):
         url = self.post_comment_url % (self.owner, self.repo, self.issue)
         try:
             self.api_req("POST", url, {"body": body})
-        except urllib2.HTTPError as e:
-            if e.code == 201:
+        except HTTPError as e:
+            if hasattr(e.response, 'status_code') and e.response.status_code == 201:
                 pass
             else:
                 raise e
@@ -180,8 +123,8 @@ class GithubAPIProvider(APIProvider):
             self._labels += [label]
         try:
             self.api_req("POST", url, [label])
-        except urllib2.HTTPError as e:
-            if e.code == 201:
+        except HTTPError as e:
+            if hasattr(e.response, 'status_code') and e.response.status_code == 201:
                 pass
             else:
                 raise e
@@ -193,7 +136,7 @@ class GithubAPIProvider(APIProvider):
             self._labels.remove(label)
         try:
             self.api_req("DELETE", url, {})
-        except urllib2.HTTPError:
+        except HTTPError:
             pass
 
     def get_labels(self):
@@ -202,8 +145,8 @@ class GithubAPIProvider(APIProvider):
             return self._labels
         try:
             result = self.api_req("GET", url)
-        except urllib2.HTTPError as e:
-            if e.code == 201:
+        except HTTPError as e:
+            if hasattr(e.response, 'status_code') and e.response.status_code == 201:
                 pass
             else:
                 raise e
@@ -220,8 +163,8 @@ class GithubAPIProvider(APIProvider):
         url = self.issue_url % (self.owner, self.repo, self.issue)
         try:
             self.api_req("PATCH", url, {"assignee": assignee})['body']
-        except urllib2.HTTPError as e:
-            if e.code == 201:
+        except HTTPError as e:
+            if hasattr(e.response, 'status_code') and e.response.status_code == 201:
                 pass
             else:
                 raise e
@@ -229,30 +172,51 @@ class GithubAPIProvider(APIProvider):
     def get_pull(self):
         return self.api_req("GET", self.pull_url)["body"]
 
-    def get_page_content(self, url):
-        try:
-            with contextlib.closing(urllib2.urlopen(url)) as fd:
-                return fd.read()
-        except urllib2.URLError:
-            return None
+    def get_diff_headers(self):
+        diff = self.get_diff()
+        for line in diff.splitlines():
+            if line.startswith(DIFF_HEADER_PREFIX):
+                yield line
 
+    def get_changed_files(self):
+        if self.changed_files is None:
+            changed_files = []
+            for line in self.get_diff_headers():
+                files = line.split(DIFF_HEADER_PREFIX)[-1].split(' ')
+                changed_files.extend(files)
 
-img = ('<img src="http://www.joshmatthews.net/warning.svg" '
-       'alt="warning" height=20>')
-warning_header = '{} **Warning** {}'.format(img, img)
-warning_summary = warning_header + '\n\n%s'
+            # And get unique values using `set()`
+            normalized = map(normalize_file_path, changed_files)
+            self.changed_files = set(f for f in normalized if f is not None)
+        return self.changed_files
+
+    def get_added_lines(self):
+        diff = self.get_diff()
+        for line in diff.splitlines():
+            if is_addition(line):
+                # prefix of one or two pluses (+)
+                yield line
 
 
 def extract_globals_from_payload(payload):
     if payload["action"] == "created" or payload["action"] == "labeled":
         owner = payload['repository']['owner']['login']
         repo = payload['repository']['name']
-        issue = str(payload['issue']['number'])
+        try:
+            issue = str(payload['issue']['number'])
+        except KeyError:
+            issue = str(payload['number'])
     else:
         owner = payload['pull_request']['base']['repo']['owner']['login']
         repo = payload['pull_request']['base']['repo']['name']
         issue = str(payload["number"])
-    return (owner, repo, issue)
+    return owner, repo, issue
+
+
+img = ('<img src="http://www.joshmatthews.net/warning.svg" '
+       'alt="warning" height=20>')
+warning_header = '{} **Warning** {}'.format(img, img)
+warning_summary = warning_header + '\n\n%s'
 
 
 def handle_payload(api, payload, handlers=None):
@@ -264,21 +228,3 @@ def handle_payload(api, payload, handlers=None):
     if warnings:
         formatted_warnings = '\n'.join(map(lambda x: '* ' + x, warnings))
         api.post_comment(warning_summary % formatted_warnings)
-
-
-if __name__ == "__main__":
-    print("Content-Type: text/html;charset=utf-8")
-    print()
-
-    cgitb.enable()
-
-    config = ConfigParser.RawConfigParser()
-    config.read('./config')
-    user = config.get('github', 'user')
-    token = config.get('github', 'token')
-
-    post = cgi.FieldStorage()
-    payload_raw = post.getfirst("payload", '')
-    payload = json.loads(payload_raw)
-
-    handle_payload(GithubAPIProvider(payload, user, token), payload)

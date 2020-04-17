@@ -1,1 +1,3 @@
-flake8 == 2.5.4
+Flask
+waitress
+requests

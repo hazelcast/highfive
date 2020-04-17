@@ -1,7 +1,7 @@
 from __future__ import absolute_import
 from helpers import linear_search
 
-import imp
+import importlib
 import os
 
 _warnings = []
@@ -62,10 +62,9 @@ def get_handlers():
     for i in possible_handlers:
         location = os.path.join('handlers', i)
         try:
-            module = imp.load_module('handlers.' + i, None, location,
-                                     ('', '', imp.PKG_DIRECTORY))
+            module = importlib.import_module(i, 'handlers' + i)
             handlers.append(module.handler_interface())
             modules.append((module, location))
         except ImportError:
             pass
-    return (modules, handlers)
+    return modules, handlers

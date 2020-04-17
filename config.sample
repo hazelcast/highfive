@@ -1,3 +1,4 @@
 [github]
-user=highfive
-token=abc123xyz789
+user = highfive
+token = abc123xyz789
+webhook_secret = abc123312
