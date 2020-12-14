@@ -2,6 +2,7 @@ import configparser
 import hashlib
 import hmac
 import json
+import urllib.request
 from logging.config import dictConfig
 
 import flask
@@ -83,6 +84,31 @@ def create_app():
         except Exception as e:
             app.log_exception(e)
             return 'Something went wrong\n', 400
+
+    @app.route('/docker-branch-build', methods=['POST'])
+    def docker_branch_build():
+        # https://docs.github.com/en/free-pro-team@latest/developers/webhooks-and-events/webhook-events-and-payloads#push
+        BRANCH_PREFIX = 'refs/heads/'
+        try:
+            payload = json.loads(flask.request.get_data(), strict=False)
+            triggers = config['dockerhub-branch-triggers']
+            if not triggers:
+                return 'No trigger URLs defined!\n', 404
+            repository = payload['repository']['full_name'];
+            if not repository in triggers:
+                return 'Trigger for repository {} not found!\n'.format(repository), 404
+            dockerhub_trigger_url = triggers[repository]
+            refname = payload['ref']
+            if not refname.startswith(BRANCH_PREFIX):
+                return 'Reference is not a branch: {}'.format(refname)
+            branch = refname[len(BRANCH_PREFIX):]
+            data = json.dumps({"source_type": "Branch", "source_name": branch})
+            with urllib.request.urlopen(url = dockerhub_trigger_url, data=data.encode('utf-8')) as f:
+                dockerhub_response = json.load(f)
+                return 'State: {}\n'.format(dockerhub_response['state']), 200
+        except Exception as e:
+            app.log_exception(e)
+            return 'Something went wrong\n', 500
 
     @app.route('/')
     def root():

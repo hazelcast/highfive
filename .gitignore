@@ -2,3 +2,6 @@
 /.idea
 config
 /venv
+.project
+.pydevproject
+server.log

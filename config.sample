@@ -2,3 +2,8 @@
 user = highfive
 token = abc123xyz789
 webhook_secret = abc123312
+
+[dockerhub-branch-triggers]
+# https://github.com/docker/hub-feedback/issues/330#issuecomment-138886896
+
+ghUser/ghRepo = https://hub.docker.com/api/build/v1/source/____UUID____/trigger/____TRIGGERID____/call/
