@@ -91,6 +91,9 @@ def create_app():
         BRANCH_PREFIX = 'refs/heads/'
         try:
             payload = json.loads(flask.request.get_data(), strict=False)
+            if not 'ref' in payload:
+                # it's probably a test request from the GitHub
+                return 'No branch defined in the payload!\n', 200
             triggers = config['dockerhub-branch-triggers']
             if not triggers:
                 return 'No trigger URLs defined!\n', 404
@@ -100,7 +103,7 @@ def create_app():
             dockerhub_trigger_url = triggers[repository]
             refname = payload['ref']
             if not refname.startswith(BRANCH_PREFIX):
-                return 'Reference is not a branch: {}'.format(refname)
+                return 'Reference is not a branch: {}'.format(refname), 200
             branch = refname[len(BRANCH_PREFIX):]
             data = json.dumps({"source_type": "Branch", "source_name": branch})
             with urllib.request.urlopen(url = dockerhub_trigger_url, data=data.encode('utf-8')) as f:
