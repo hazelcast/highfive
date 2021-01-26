@@ -8,6 +8,7 @@ from logging.config import dictConfig
 import flask
 from waitress import serve
 
+from handlers.client_issues import ClientIssuesHandler
 from handlers.welcome_user import WelcomeUserHandler
 from newpr import GithubAPIProvider, handle_payload
 
@@ -65,7 +66,7 @@ def create_app():
         try:
             api_provider = GithubAPIProvider(payload, user, token)
             api_provider.extract_globals(payload)
-            handle_payload(api_provider, payload, [WelcomeUserHandler()])
+            handle_payload(api_provider, payload, [WelcomeUserHandler(), ClientIssuesHandler()])
             return 'OK\n', 200
         except Exception as e:
             app.logger.error('An exception occurred while processing a web hook. Delivery id: {}, event name: {}'

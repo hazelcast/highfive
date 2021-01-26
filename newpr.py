@@ -17,7 +17,7 @@ class GithubAPIProvider:
     contributors_url = BASE_URL + "repos/%s/%s/contributors?per_page=400"
     post_comment_url = BASE_URL + "repos/%s/%s/issues/%s/comments"
     collaborators_url = BASE_URL + "repos/%s/%s/collaborators"
-    issue_url = BASE_URL + "repos/%s/%s/issues/%s"
+    issue_url = BASE_URL + "repos/%s/%s/issues"
     get_label_url = BASE_URL + "repos/%s/%s/issues/%s/labels"
     add_label_url = BASE_URL + "repos/%s/%s/issues/%s/labels"
     remove_label_url = BASE_URL + "%repos/s/%s/issues/%s/labels/%s"
@@ -168,7 +168,7 @@ Through arcane magic we have determined that the following fragments from the bu
         return self._diff
 
     def set_assignee(self, assignee):
-        url = self.issue_url % (self.owner, self.repo, self.issue)
+        url = (self.issue_url % (self.owner, self.repo)) + "/" + self.issue
         try:
             self.api_req("PATCH", url, {"assignee": assignee})['body']
         except HTTPError as e:
@@ -204,6 +204,19 @@ Through arcane magic we have determined that the following fragments from the bu
             if is_addition(line):
                 # prefix of one or two pluses (+)
                 yield line
+
+    def create_issue(self, title, body, owner=None, repo=None):
+        owner = owner or self.owner
+        repo = repo or self.repo
+
+        url = self.issue_url % (owner, repo)
+        try:
+            self.api_req("POST", url, {"title": title, "body": body})
+        except HTTPError as e:
+            if hasattr(e.response, 'status_code') and e.response.status_code == 201:
+                pass
+            else:
+                raise e
 
 
 def extract_globals_from_payload(payload):
