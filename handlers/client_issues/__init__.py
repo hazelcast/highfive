@@ -17,8 +17,6 @@ ISSUE_TITLE = "[TRACKING ISSUE] %s"
 
 ISSUE_BODY = """The tracking issue for the Java side PR.
 
-**%s**
-
 See %s for details.
 
 ---
@@ -33,15 +31,9 @@ class ClientIssuesHandler(EventHandler):
             return
 
         pr = payload["pull_request"]
-        labels = pr["labels"]
+        label = payload["label"]
 
-        should_create = False
-        for label in labels:
-            if label["name"] == LABEL_NAME:
-                should_create = True
-                break
-
-        if not should_create:
+        if label["name"] != LABEL_NAME:
             return
 
         title = pr["title"]
@@ -49,6 +41,7 @@ class ClientIssuesHandler(EventHandler):
         pr_body = pr["body"]
 
         issue_title = ISSUE_TITLE % title
-        issue_body = ISSUE_BODY % (title, html_url, pr_body)
+        issue_body = ISSUE_BODY % (html_url, pr_body)
+
         for client in CLIENTS:
             api.create_issue(issue_title, issue_body, "hazelcast", client)
